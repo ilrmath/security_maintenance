@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<!-- saved from url=(0058)file:///Users/kohtasekiya/Desktop/2026-01-30_08-20-26.html -->
+<html lang="ja"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IPルーティング実習ドリル (v6.4 手動でルータ表を選択)</title>
+  <style>
+    :root {
+      --bg: #1a202c;
+      --panel: #2d3748;
+      --text: #e2e8f0;
+      --accent: #48bb78; /* 緑 */
+      --danger: #e53e3e; /* 赤 */
+      --highlight: #ecc94b; /* 黄色 */
+      --border: #4a5568;
+    }
+    body {
+      margin: 0; font-family: "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg); color: var(--text); padding: 20px;
+    }
+    .container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1fr 480px; gap: 20px; }
+
+    /* 左カラム（図 + 図下アラート領域） */
+    .left-col { display: flex; flex-direction: column; gap: 10px; }
+
+    /* --- トポロジー図 --- */
+    .topology-area {
+      position: relative; height: 550px; background: #171923;
+      border: 2px solid var(--border); border-radius: 12px; overflow: hidden;
+    }
+    svg { width: 100%; height: 100%; position: absolute; top:0; left:0; pointer-events: none; z-index: 1; }
+    line { stroke: #718096; stroke-width: 3; opacity: 0.5; }
+
+    .port-label {
+      position: absolute; font-size: 11px; font-weight: bold; font-family: monospace;
+      color: #1a202c; background: #fbbf24;
+      padding: 2px 6px; border-radius: 4px; border: 1px solid #fff;
+      transform: translate(-50%, -50%); z-index: 20;
+    }
+    .node {
+      position: absolute; transform: translate(-50%, -50%);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: bold; font-size: 13px; z-index: 10; cursor: pointer; transition: 0.2s;
+      user-select: none;
+    }
+    .net {
+      width: 90px; height: 45px; border-radius: 25px;
+      background: rgba(66, 153, 225, 0.15); border: 2px dashed #63b3ed; color: #90cdf4;
+    }
+
+    /* --- ルータのスタイル --- */
+    .router {
+      width: 60px; height: 60px; border-radius: 8px;
+      background: #edf2f7; color: #1a202c; border: 2px solid #cbd5e0;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      flex-direction: column;
+      line-height: 1.1;
+      gap: 2px;
+    }
+    .router:hover { transform: translate(-50%, -50%) scale(1.05); }
+    .router.selected {
+      background: #fff; border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(72, 187, 120, 0.6);
+    }
+    /* ★パケットが「今いる/今通った」ルータは光らせる（テーブルは切り替えない） */
+    .router.forwarding {
+      border-color: #f6e05e;
+      box-shadow: 0 0 0 4px rgba(236,201,75,0.55), 0 8px 16px rgba(0,0,0,0.35);
+    }
+
+    .rt-label { font-size: 10px; color: #4a5568; font-weight: normal; }
+    .rt-id { font-size: 20px; font-weight: 800; color: #1a202c; }
+
+    /* パケット */
+    .packet {
+      position: absolute; width: 20px; height: 20px; background: #f6e05e;
+      border-radius: 50%; box-shadow: 0 0 10px #f6e05e;
+      transform: translate(-50%, -50%); opacity: 0; pointer-events: none; z-index: 30;
+    }
+
+    /* ★選択中タグ（フローティング） */
+    .selected-tag{
+      position:absolute;
+      z-index:25;              /* port-label(20)より上 */
+      pointer-events:none;
+      font-size:11px;
+      font-weight:900;
+      padding:4px 10px;
+      border-radius:999px;
+      background: rgba(72,187,120,0.95); /* accent緑 */
+      color:#111827;
+      border: 1px solid rgba(255,255,255,0.35);
+      box-shadow: 0 8px 18px rgba(0,0,0,0.35);
+      white-space:nowrap;
+      display:none;            /* 初期は非表示（updateSelectedTagで出す） */
+    }
+
+    /* 図の下の警告枠（ループ警告などをここへ） */
+    .topology-alert {
+      height: 56px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: #171923;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      box-sizing: border-box;
+      opacity: 0;
+      transform: translateY(-6px);
+      transition: 0.18s ease;
+      pointer-events: none;
+    }
+    .topology-alert.show { opacity: 1; transform: translateY(0); }
+    .topology-alert .badge {
+      min-width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      color: #111827;
+      background: #fbd38d;
+      border: 1px solid rgba(255,255,255,0.35);
+      box-shadow: 0 6px 14px rgba(0,0,0,0.35);
+    }
+    .topology-alert.loop { border-color: rgba(229,62,62,0.9); }
+    .topology-alert.loop .badge { background: #fc8181; }
+    .topology-alert .msg {
+      font-weight: 900;
+      color: #fde68a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .topology-alert .hint {
+      margin-left: auto;
+      font-size: 12px;
+      font-weight: 800;
+      color: #a7f3d0;
+      opacity: 0.9;
+      white-space: nowrap;
+    }
+
+    /* --- 操作パネル --- */
+    .panel { display: flex; flex-direction: column; gap: 15px; }
+    .control-box, .table-box {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 15px;
+    }
+    .table-box { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+
+    .table-header {
+      padding: 10px; background: rgba(0,0,0,0.2); font-weight: bold;
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 10px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px; color: #a0aec0; border-bottom: 1px solid var(--border); }
+    td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+
+    /* アニメーション */
+    @keyframes highlightFlash {
+      0% { background-color: var(--highlight); color: #000; }
+      100% { background-color: transparent; color: var(--accent); }
+    }
+    .cell-changed { animation: highlightFlash 0.8s ease-out; }
+
+    /* 現在の目的宛先の行をハイライト */
+    tr.active-row td { background: rgba(236, 201, 75, 0.12); }
+    tr.active-row td:first-child { border-left: 4px solid var(--highlight); }
+
+    select {
+      background: #1a202c; color: #fff; border: 1px solid #718096;
+      width: 100%; padding: 10px; border-radius: 4px; font-family: sans-serif; font-size: 13px;
+    }
+    label { font-size: 11px; color: #a0aec0; display: block; margin-bottom: 5px; font-weight: bold; }
+
+    /* ボタン類 */
+    .btn-group { display: flex; gap: 10px; margin-top: 15px; }
+    button {
+      padding: 12px; color: #fff; border: none; font-weight: bold;
+      cursor: pointer; border-radius: 4px; font-size: 14px; transition: 0.2s;
+    }
+    button.btn-run { flex: 2; background: var(--accent); }
+    button.btn-run:hover { background: #38a169; }
+    button.btn-run:disabled { opacity: 0.5; cursor: not-allowed; background: #718096; }
+    button.btn-reset { flex: 1; background: var(--danger); }
+    button.btn-reset:hover { background: #c53030; }
+
+    .mini-note {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #cbd5e0;
+      line-height: 1.45;
+    }
+    .mini-note b { color: #fde68a; }
+
+    .posline {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.15);
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 12px;
+      color: #e2e8f0;
+    }
+    .posline .tag { color:#a0aec0; font-weight:900; }
+    .posline .val { color:#f6e05e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* 右下トースト（一般通知用） */
+    #toast {
+      position: fixed; bottom: 30px; right: 30px; padding: 15px 25px; background: #2d3748;
+      border-left: 5px solid var(--accent); color: #fff; transform: translateY(150px); transition: 0.3s;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5); z-index: 100; font-weight: bold; border-radius: 4px;
+      max-width: min(520px, calc(100vw - 60px));
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #toast.show { transform: translateY(0); }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <!-- 左：ネットワーク図 + 図の下アラート -->
+  <div class="left-col">
+    <div class="topology-area" id="topology">
+      <svg id="svg-layer"><line x1="70" y1="275" x2="209" y2="275"></line><line x1="209" y1="275" x2="348" y2="275"></line><line x1="348" y1="275" x2="487" y2="275"></line><line x1="348" y1="275" x2="348" y2="110"></line><line x1="348" y1="275" x2="313" y2="468"></line><line x1="487" y1="275" x2="626" y2="275"></line><line x1="348" y1="110" x2="487" y2="110"></line><line x1="313" y1="468" x2="452" y2="468"></line><line x1="452" y1="468" x2="626" y2="468"></line><line x1="626" y1="468" x2="626" y2="275"></line></svg>
+
+      <div class="node net" id="net4" style="left:10%; top:50%">ネット4</div>
+      <div class="node net" id="net1" style="left:50%; top:50%">ネット1</div>
+      <div class="node net" id="net2" style="left:90%; top:50%">ネット2</div>
+      <div class="node net" id="net5" style="left:70%; top:20%">ネット5</div>
+      <div class="node net" id="net3" style="left:65%; top:85%">ネット3</div>
+
+      <!-- ★クリックで表示するルータ表を切り替える（送信中でもOK） -->
+      <div class="node router selected" id="r1" style="left:30%; top:50%" onclick="selectRouterUI(&#39;r1&#39;)">
+          <span class="rt-label">ルータ</span><span class="rt-id">1</span>
+      </div>
+      <div class="node router" id="r2" style="left:70%; top:50%" onclick="selectRouterUI(&#39;r2&#39;)">
+          <span class="rt-label">ルータ</span><span class="rt-id">2</span>
+      </div>
+      <div class="node router" id="r5" style="left:50%; top:20%" onclick="selectRouterUI(&#39;r5&#39;)">
+          <span class="rt-label">ルータ</span><span class="rt-id">5</span>
+      </div>
+      <div class="node router" id="r4" style="left:45%; top:85%" onclick="selectRouterUI(&#39;r4&#39;)">
+          <span class="rt-label">ルータ</span><span class="rt-id">4</span>
+      </div>
+      <div class="node router" id="r3" style="left:90%; top:85%" onclick="selectRouterUI(&#39;r3&#39;)">
+          <span class="rt-label">ルータ</span><span class="rt-id">3</span>
+      </div>
+
+      <div class="packet" id="packet" style="transition: left 0.6s linear, top 0.6s linear; left: 90%; top: 50%; opacity: 0;"></div>
+
+      <!-- ★追加：選択中タグ（フローティング） -->
+      <div class="selected-tag" id="selected-tag" aria-hidden="true" style="display: block; left: 250.397px; top: 237.4px; transform: translate(0px, -100%);">💡選択中</div>
+    <div class="port-label" style="left: 174.25px; top: 275px;">E0</div><div class="port-label" style="left: 243.75px; top: 275px;">E1</div><div class="port-label" style="left: 452.25px; top: 275px;">E0</div><div class="port-label" style="left: 348px; top: 151.25px;">E0</div><div class="port-label" style="left: 321.75px; top: 419.75px;">E0</div><div class="port-label" style="left: 521.75px; top: 275px;">E1</div><div class="port-label" style="left: 382.75px; top: 110px;">E1</div><div class="port-label" style="left: 347.75px; top: 468px;">E1</div><div class="port-label" style="left: 582.5px; top: 468px;">E1</div><div class="port-label" style="left: 626px; top: 419.75px;">E0</div></div>
+
+    <!-- ループ警告などはここ（図の枠の下の余白） -->
+    <div class="topology-alert" id="topology-alert" aria-live="polite">
+      <div class="badge">!</div>
+      <div class="msg" id="topology-alert-msg">　</div>
+      <div class="hint" id="topology-alert-hint">　</div>
+    </div>
+  </div>
+
+  <!-- 右：操作パネル -->
+  <div class="panel">
+    <div class="control-box">
+      <h3 style="margin:0 0 15px 0; font-size:16px; border-bottom:1px solid #4a5568; padding-bottom:10px;">🎮 ルーティング演習ドリル</h3>
+
+      <div style="display:flex; flex-direction:column; gap:15px;">
+        <div>
+          <label>1. 出発地 (Start)</label>
+          <select id="sel-src" onchange="updateGoalOptions()">
+            <option value="net1">ネット1 (中央)</option>
+            <option value="net2">ネット2 (右端)</option>
+            <option value="net3">ネット3 (下部)</option>
+            <option value="net4">ネット4 (左端)</option>
+            <option value="net5">ネット5 (上部)</option>
+          </select>
+        </div>
+
+        <div>
+          <label>2. 目的地 (Goal: 入口の指定)</label>
+          <select id="sel-dst"><option value="net2|r1">ネット2 (経由: ルータ1)</option><option value="net2|r2">ネット2 (経由: ルータ2)</option><option value="net2|r5">ネット2 (経由: ルータ5)</option><option value="net2|r4">ネット2 (経由: ルータ4)</option><option value="net3|r1">ネット3 (経由: ルータ1)</option><option value="net3|r2">ネット3 (経由: ルータ2)</option><option value="net3|r5">ネット3 (経由: ルータ5)</option><option value="net3|r4">ネット3 (経由: ルータ4)</option><option value="net4|r1">ネット4 (経由: ルータ1)</option><option value="net4|r2">ネット4 (経由: ルータ2)</option><option value="net4|r5">ネット4 (経由: ルータ5)</option><option value="net4|r4">ネット4 (経由: ルータ4)</option><option value="net5|r1">ネット5 (経由: ルータ1)</option><option value="net5|r2">ネット5 (経由: ルータ2)</option><option value="net5|r5">ネット5 (経由: ルータ5)</option><option value="net5|r4">ネット5 (経由: ルータ4)</option></select>
+          <div class="mini-note">
+            ※送信中でも<b>テーブルは自動で切り替えません</b>。<br>
+            図のルータを<b>クリックして</b>、見たいルータの表を開いたまま修正できます。
+          </div>
+
+          <div class="posline">
+            <span class="tag">パケット位置</span>
+            <span class="val" id="lbl-pos">ネット2</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn-run" onclick="runOrStop()" id="btn-go">🚀 送信テスト</button>
+        <button class="btn-reset" onclick="resetAll()">🔄 リセット</button>
+      </div>
+    </div>
+
+    <div class="table-box">
+      <div class="table-header">
+        <span id="lbl-table-name">📋 ルータ1 の設定</span>
+        <span style="font-size:11px; color:#ecc94b; font-weight:bold;">★GWを変えて経路を作ろう</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th width="15%">宛先</th>
+            <th width="15%">IF</th>
+            <th width="50%">ゲートウェイ (Next Hop)</th>
+            <th width="20%">メトリック</th>
+          </tr>
+        </thead>
+        <tbody id="tbody-routes"><tr id="row-net1"><td style="font-weight: bold; color: rgb(160, 174, 192);">ネット1</td><td id="cell-if-net1" style="font-weight: bold; color: var(--accent); text-align: center;">E1</td><td><span style="color:var(--accent); font-weight:bold;">✅ 直接接続</span></td><td id="cell-m-net1" style="text-align: center;">1</td></tr><tr id="row-net2" class="active-row"><td style="font-weight: bold; color: rgb(160, 174, 192);">ネット2</td><td id="cell-if-net2" style="font-weight: bold; color: var(--accent); text-align: center;">E1</td><td><select style="width: 100%;"><option value="0">ルータ2 (GW: ルータ2)</option><option value="1">ルータ4 (GW: ルータ4)</option></select></td><td id="cell-m-net2" style="text-align: center;">2</td></tr><tr id="row-net3"><td style="font-weight: bold; color: rgb(160, 174, 192);">ネット3</td><td id="cell-if-net3" style="font-weight: bold; color: var(--accent); text-align: center;">E1</td><td><select style="width: 100%;"><option value="0">ルータ2 (GW: ルータ2)</option><option value="1">ルータ4 (GW: ルータ4)</option></select></td><td id="cell-m-net3" style="text-align: center;">3</td></tr><tr id="row-net4"><td style="font-weight: bold; color: rgb(160, 174, 192);">ネット4</td><td id="cell-if-net4" style="font-weight: bold; color: var(--accent); text-align: center;">E0</td><td><span style="color:var(--accent); font-weight:bold;">✅ 直接接続</span></td><td id="cell-m-net4" style="text-align: center;">1</td></tr><tr id="row-net5"><td style="font-weight: bold; color: rgb(160, 174, 192);">ネット5</td><td id="cell-if-net5" style="font-weight: bold; color: var(--accent); text-align: center;">E1</td><td><select style="width: 100%;"><option value="0">ルータ5(最適) (GW: ルータ5)</option><option value="1">ルータ2(遠回り) (GW: ルータ2)</option><option value="2">ルータ4(遠回り) (GW: ルータ4)</option></select></td><td id="cell-m-net5" style="text-align: center;">2</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="" style="border-left-color: rgb(72, 187, 120);">🎉 成功！目的地に到着しました</div>
+
+<script>
+/* === 1. 物理接続データ === */
+const LINKS = [
+  { a:'net4', b:'r1', portB:'E0' },
+  { a:'r1', b:'net1', portA:'E1' },
+  { a:'net1', b:'r2', portB:'E0' },
+  { a:'net1', b:'r5', portB:'E0' },
+  { a:'net1', b:'r4', portB:'E0' },
+  { a:'r2', b:'net2', portA:'E1' },
+  { a:'r5', b:'net5', portA:'E1' },
+  { a:'r4', b:'net3', portA:'E1' },
+  { a:'net3', b:'r3', portB:'E1' },
+  { a:'r3', b:'net2', portA:'E0' }
+];
+
+/* === 2. ルーティングデータ === */
+const ROUTE_DB = {
+  "r1": {
+    "net1": [{ gw:"Direct", if:"E1", m:1, note:"直接" }],
+    "net2": [{ gw:"r2", if:"E1", m:2, note:"ルータ2" }, { gw:"r4", if:"E1", m:3, note:"ルータ4" }],
+    "net3": [{ gw:"r2", if:"E1", m:3, note:"ルータ2" }, { gw:"r4", if:"E1", m:2, note:"ルータ4" }],
+    "net4": [{ gw:"Direct", if:"E0", m:1, note:"直接" }],
+    "net5": [
+      { gw:"r5", if:"E1", m:2, note:"ルータ5(最適)" },
+      { gw:"r2", if:"E1", m:3, note:"ルータ2(遠回り)" },
+      { gw:"r4", if:"E1", m:3, note:"ルータ4(遠回り)" }
+    ]
+  },
+  "r2": {
+    "net1": [{ gw:"Direct", if:"E0", m:1, note:"直接" }],
+    "net2": [{ gw:"Direct", if:"E1", m:1, note:"直接" }],
+    "net3": [
+      { gw:"r4", if:"E0", m:2, note:"ルータ4" },
+      { gw:"r3", if:"E1", m:2, note:"ルータ3" }
+    ],
+    "net4": [
+      { gw:"r1", if:"E0", m:2, note:"ルータ1" },
+      { gw:"r3", if:"E1", m:4, note:"ルータ3" }
+    ],
+    "net5": [
+      { gw:"r5", if:"E0", m:2, note:"ルータ5" },
+      { gw:"r3", if:"E1", m:4, note:"ルータ3" }
+    ]
+  },
+  "r3": {
+    "net1": [
+      { gw:"r2", if:"E0", m:2, note:"ルータ2" },
+      { gw:"r4", if:"E1", m:2, note:"ルータ4" }
+    ],
+    "net2": [{ gw:"Direct", if:"E0", m:1, note:"直接" }],
+    "net3": [{ gw:"Direct", if:"E1", m:1, note:"直接" }],
+    "net4": [
+      { gw:"r2", if:"E0", m:3, note:"ルータ2" },
+      { gw:"r4", if:"E1", m:3, note:"ルータ4" }
+    ],
+    "net5": [
+      { gw:"r2", if:"E0", m:3, note:"ルータ2" },
+      { gw:"r4", if:"E1", m:3, note:"ルータ4" }
+    ]
+  },
+  "r4": {
+    "net1": [{ gw:"Direct", if:"E0", m:1, note:"直接" }],
+    "net2": [
+      { gw:"r2", if:"E0", m:2, note:"ルータ2" },
+      { gw:"r3", if:"E1", m:2, note:"ルータ3" }
+    ],
+    "net3": [{ gw:"Direct", if:"E1", m:1, note:"直接" }],
+    "net4": [
+      { gw:"r1", if:"E0", m:2, note:"ルータ1" },
+      { gw:"r3", if:"E1", m:4, note:"ルータ3" }
+    ],
+    "net5": [
+      { gw:"r5", if:"E0", m:2, note:"ルータ5" },
+      { gw:"r3", if:"E1", m:4, note:"ルータ3" }
+    ]
+  },
+  "r5": {
+    "net1": [{ gw:"Direct", if:"E0", m:1, note:"直接" }],
+    "net2": [
+      { gw:"r2", if:"E0", m:2, note:"ルータ2" },
+      { gw:"r4", if:"E0", m:4, note:"ルータ4" }
+    ],
+    "net3": [
+      { gw:"r2", if:"E0", m:3, note:"ルータ2" },
+      { gw:"r4", if:"E0", m:2, note:"ルータ4" }
+    ],
+    "net4": [
+      { gw:"r1", if:"E0", m:2, note:"ルータ1" },
+      { gw:"r2", if:"E0", m:5, note:"ルータ2" }
+    ],
+    "net5": [{ gw:"Direct", if:"E1", m:1, note:"直接" }]
+  }
+};
+
+/* === 3. 状態管理 === */
+let currentConfig = {};
+function initConfig() {
+  ['r1','r2','r3','r4','r5'].forEach(r => {
+    currentConfig[r] = {};
+    ['net1','net2','net3','net4','net5'].forEach(n => currentConfig[r][n] = 0);
+  });
+}
+initConfig();
+
+let showingRouter = 'r2';
+
+/* シミュレーション制御 */
+let isRunning = false;
+let simRunId = 0; // stop用トークン
+
+/* ★日本語化ヘルパー関数(安全版)★ */
+function toJp(id) {
+  if (!id) return "";
+  if (/^net\d+$/i.test(id)) return id.replace(/^net/i, 'ネット');
+  if (/^r\d+$/i.test(id)) return id.replace(/^r/i, 'ルータ');
+  return id;
+}
+
+window.onload = () => {
+  drawTopology();
+  selectRouterUI('r2');
+  updateGoalOptions();
+  window.addEventListener('resize', () => drawTopology());
+  updateSelectedTag(); // ★追加（保険）
+};
+
+/* === リセット機能 === */
+function resetAll() {
+  if (isRunning) stopSim(true);
+  initConfig();
+  selectRouterUI(showingRouter);
+  toast("🔄 設定をすべて初期状態に戻しました", false);
+}
+
+/* --- 描画系 --- */
+function drawTopology() {
+  const svg = document.getElementById('svg-layer');
+  const area = document.getElementById('topology');
+  svg.innerHTML = '';
+  document.querySelectorAll('.port-label').forEach(e => e.remove());
+
+  LINKS.forEach(l => {
+    const e1 = document.getElementById(l.a);
+    const e2 = document.getElementById(l.b);
+    const x1 = e1.offsetLeft, y1 = e1.offsetTop;
+    const x2 = e2.offsetLeft, y2 = e2.offsetTop;
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    svg.appendChild(line);
+
+    if(l.portA) addLabel(area, x1,y1, x2,y2, l.portA);
+    if(l.portB) addLabel(area, x2,y2, x1,y1, l.portB);
+  });
+
+  updateSelectedTag(); // ★追加：リサイズ/再描画で追従
+}
+
+function addLabel(area, x1,y1, x2,y2, text) {
+  const lbl = document.createElement('div');
+  lbl.className = 'port-label'; lbl.innerText = text;
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  let ratio = 0.25; if(dist < 100) ratio = 0.35;
+  lbl.style.left = (x1 + dx * ratio) + 'px';
+  lbl.style.top = (y1 + dy * ratio) + 'px';
+  area.appendChild(lbl);
+}
+
+/* ★追加：選択中タグを「緑印のルータ」の近くにフローティング表示（ポートラベルを邪魔しにくい退避付き） */
+function updateSelectedTag() {
+  const tag = document.getElementById('selected-tag');
+  const area = document.getElementById('topology');
+  const sel = document.getElementById(showingRouter);
+  if (!tag || !area || !sel) return;
+
+  // サイズ計測のため表示
+  tag.style.display = 'block';
+
+  const areaRect = area.getBoundingClientRect();
+  const rRect = sel.getBoundingClientRect();
+
+  const tagW = tag.offsetWidth;
+  const tagH = tag.offsetHeight;
+
+  const margin = 6;
+
+  // 基本：右上
+  let left = (rRect.right - areaRect.left) + margin;
+  let topBase = (rRect.top - areaRect.top) - margin;
+
+  // 右にはみ出す→左へ退避
+  if (left + tagW > area.clientWidth - margin) {
+    left = (rRect.left - areaRect.left) - margin - tagW;
+  }
+  // 左にもはみ出す→クランプ
+  if (left < margin) left = margin;
+
+  // 上にはみ出す→下へ退避
+  let useAbove = true;
+  if (topBase < tagH + margin) useAbove = false;
+
+  tag.style.left = left + 'px';
+
+  if (useAbove) {
+    tag.style.top = topBase + 'px';
+    tag.style.transform = 'translate(0, -100%)';
+  } else {
+    tag.style.top = (rRect.bottom - areaRect.top + margin) + 'px';
+    tag.style.transform = 'translate(0, 0)';
+  }
+}
+
+function selectRouterUI(rid) {
+  showingRouter = rid;
+
+  // 選択表示（これは「表として見ているルータ」）
+  document.querySelectorAll('.router').forEach(e => e.classList.remove('selected'));
+  document.getElementById(rid).classList.add('selected');
+
+  document.getElementById('lbl-table-name').innerText = `📋 ${toJp(rid)} の設定`;
+  renderTable();
+
+  updateSelectedTag(); // ★追加：クリックで追従
+}
+
+function renderTable() {
+  const tbody = document.getElementById('tbody-routes');
+  tbody.innerHTML = '';
+  const rid = showingRouter;
+  const dests = ['net1','net2','net3','net4','net5'];
+
+  dests.forEach(d => {
+    const opts = ROUTE_DB[rid][d];
+    if(!opts) return;
+
+    const tr = document.createElement('tr');
+    tr.id = `row-${d}`;
+    const curIdx = currentConfig[rid][d];
+    const safeIdx = (Number.isInteger(curIdx) && curIdx >= 0 && curIdx < opts.length) ? curIdx : 0;
+    currentConfig[rid][d] = safeIdx;
+    const curRoute = opts[safeIdx];
+
+    const tdDest = document.createElement('td');
+    tdDest.style.fontWeight = "bold";
+    tdDest.style.color = "#a0aec0";
+    tdDest.innerText = toJp(d);
+
+    const tdIF = document.createElement('td');
+    tdIF.id = `cell-if-${d}`;
+    tdIF.style.fontWeight = "bold";
+    tdIF.style.color = "var(--accent)";
+    tdIF.style.textAlign = "center";
+    tdIF.innerText = curRoute.if;
+
+    const tdGw = document.createElement('td');
+    if(curRoute.gw === 'Direct') {
+      tdGw.innerHTML = '<span style="color:var(--accent); font-weight:bold;">✅ 直接接続</span>';
+    } else {
+      const sel = document.createElement('select');
+      sel.style.width = '100%';
+      sel.onchange = function() { changeRoute(rid, d, this.value); };
+
+      opts.forEach((opt, idx) => {
+        const el = document.createElement('option');
+        el.value = idx;
+        el.text = `${opt.note} (GW: ${toJp(opt.gw)})`;
+        if(idx === safeIdx) el.selected = true;
+        sel.appendChild(el);
+      });
+      tdGw.appendChild(sel);
+    }
+
+    const tdMet = document.createElement('td');
+    tdMet.id = `cell-m-${d}`;
+    tdMet.style.textAlign = "center";
+    tdMet.innerText = curRoute.m;
+
+    tr.appendChild(tdDest);
+    tr.appendChild(tdIF);
+    tr.appendChild(tdGw);
+    tr.appendChild(tdMet);
+    tbody.appendChild(tr);
+  });
+
+  const dstVal = document.getElementById('sel-dst').value;
+  if (dstVal) {
+    const dst = dstVal.split('|')[0];
+    document.querySelectorAll('tbody tr').forEach(tr => tr.classList.remove('active-row'));
+    const row = document.getElementById(`row-${dst}`);
+    if(row) row.classList.add('active-row');
+  }
+}
+
+function changeRoute(rid, dest, valIdx) {
+  const newVal = parseInt(valIdx, 10);
+  currentConfig[rid][dest] = newVal;
+
+  const newRouteData = ROUTE_DB[rid][dest][newVal];
+
+  const ifCell = document.getElementById(`cell-if-${dest}`);
+  if(ifCell) {
+    ifCell.innerText = newRouteData.if;
+    ifCell.classList.remove('cell-changed');
+    void ifCell.offsetWidth;
+    ifCell.classList.add('cell-changed');
+  }
+  const mCell = document.getElementById(`cell-m-${dest}`);
+  if(mCell) {
+    mCell.innerText = newRouteData.m;
+    mCell.classList.remove('cell-changed');
+    void mCell.offsetWidth;
+    mCell.classList.add('cell-changed');
+  }
+}
+
+function updateGoalOptions() {
+  const src = document.getElementById('sel-src').value;
+  const dstSelect = document.getElementById('sel-dst');
+  dstSelect.innerHTML = '';
+
+  const dests = ['net1','net2','net3','net4','net5'];
+  const neighbors = getNeighbors(src).filter(n => n.startsWith('r'));
+
+  dests.forEach(d => {
+    if (d === src) return;
+    neighbors.forEach(gw => {
+      const opt = document.createElement('option');
+      opt.value = `${d}|${gw}`;
+      opt.text = `${toJp(d)} (経由: ${toJp(gw)})`;
+      dstSelect.appendChild(opt);
+    });
+  });
+
+  if(dstSelect.options.length > 0) dstSelect.selectedIndex = 0;
+  renderTable();
+}
+
+/* ====== 図の下アラート（ループ警告はここへ） ====== */
+let topoAlertTimer = null;
+function showTopoAlertLoop(message, hint="GWを変えて脱出しよう") {
+  const box = document.getElementById('topology-alert');
+  const msg = document.getElementById('topology-alert-msg');
+  const h = document.getElementById('topology-alert-hint');
+
+  box.classList.add('loop');
+  msg.textContent = message;
+  h.textContent = hint;
+
+  box.classList.add('show');
+
+  clearTimeout(topoAlertTimer);
+  topoAlertTimer = setTimeout(() => {
+    box.classList.remove('show');
+  }, 2600);
+}
+function clearTopoAlert() {
+  const box = document.getElementById('topology-alert');
+  box.classList.remove('show');
+}
+
+/* ====== パケット位置表示＆ルータ点灯（表は切り替えない） ====== */
+function setPacketPosLabel(id) {
+  document.getElementById('lbl-pos').textContent = toJp(id);
+}
+function markForwardingRouter(rid) {
+  document.querySelectorAll('.router').forEach(e => e.classList.remove('forwarding'));
+  const el = document.getElementById(rid);
+  if (el) el.classList.add('forwarding');
+}
+
+/* ====== 送信シミュレーション（動的反映版 / 手動で表を選択） ====== */
+function runOrStop() {
+  if (isRunning) stopSim(false);
+  else startSim();
+}
+
+function setRunningUI(running) {
+  const btn = document.getElementById('btn-go');
+  btn.textContent = running ? "⏹ 停止" : "🚀 送信テスト";
+  document.getElementById('sel-src').disabled = running;
+  document.getElementById('sel-dst').disabled = running;
+}
+
+function stopSim(silent) {
+  isRunning = false;
+  simRunId++;
+  setRunningUI(false);
+
+  const pkt = document.getElementById('packet');
+  pkt.style.opacity = 0;
+
+  clearTopoAlert();
+  document.querySelectorAll('.router').forEach(e => e.classList.remove('forwarding'));
+  setPacketPosLabel("—");
+
+  if (!silent) toast("⏹ 停止しました（設定は保持されています）", false);
+}
+
+function detectLoop(hist) {
+  if (hist.length < 4) return false;
+  const n = hist.length;
+  const a = hist[n-1], b = hist[n-2], c = hist[n-3], d = hist[n-4];
+  if (a === c && b === d && a !== b) return true; // ABAB
+  if (a === b && b === c) return true; // AAA
+  return false;
+}
+
+async function startSim() {
+  if(isRunning) return;
+
+  const src = document.getElementById('sel-src').value;
+  const dstVal = document.getElementById('sel-dst').value;
+  if(!dstVal) return;
+
+  const [targetDst, firstHop] = dstVal.split('|');
+  if(!targetDst || !firstHop) return;
+
+  isRunning = true;
+  const myRun = ++simRunId;
+  setRunningUI(true);
+
+  const pkt = document.getElementById('packet');
+  const startEl = document.getElementById(src);
+
+  pkt.style.transition = 'none';
+  pkt.style.left = startEl.style.left;
+  pkt.style.top = startEl.style.top;
+  pkt.style.opacity = 1;
+
+  setPacketPosLabel(src);
+
+  await wait(50);
+  if (!isRunning || myRun !== simRunId) return;
+
+  pkt.style.transition = 'left 0.6s linear, top 0.6s linear';
+
+  toast(`🚀 送信開始: ${toJp(src)} → ${toJp(firstHop)}（目標: ${toJp(targetDst)}）`);
+
+  // 初手: srcネット → firstHopルータ
+  await animTo(firstHop);
+  if (!isRunning || myRun !== simRunId) return;
+
+  let currentRouter = firstHop;
+  const hopStack = [];
+
+  let lastLoopAlert = 0;
+  let lastNoRouteToast = 0;
+  const routerHist = [];
+
+  while (isRunning && myRun === simRunId) {
+
+    routerHist.push(currentRouter);
+    if (routerHist.length > 12) routerHist.shift();
+
+    // ループ警告（図の下へ）
+    if (detectLoop(routerHist) && Date.now() - lastLoopAlert > 900) {
+      showTopoAlertLoop("🔁 ループ中っぽい！パケットが往復しています", "ルータをクリックして表を固定し、GWを修正");
+      lastLoopAlert = Date.now();
+    }
+
+    // 考える猶予
+    await wait(350);
+    if (!isRunning || myRun !== simRunId) break;
+
+    const routerOpts = ROUTE_DB[currentRouter]?.[targetDst];
+
+    // 経路自体が無い → 戻る（往復継続）
+    if (!routerOpts) {
+      if (Date.now() - lastNoRouteToast > 2500) {
+        toast(`⚠️ ${toJp(currentRouter)}: ${toJp(targetDst)} への経路なし → 戻ります（設定変更で解決）`, true);
+        lastNoRouteToast = Date.now();
+      }
+      await bounceBack(currentRouter, src, firstHop, hopStack, myRun);
+      currentRouter = bounceBack._currentRouter;
+      continue;
+    }
+
+    // ★ここが「動的反映」：ユーザが今変えたcurrentConfigを毎回読み直す
+    let idx = currentConfig[currentRouter][targetDst];
+    if (!Number.isInteger(idx) || idx < 0 || idx >= routerOpts.length) idx = 0;
+
+    const route = routerOpts[idx];
+
+    // 直接接続なら目的ネットへ
+    if (route.gw === 'Direct') {
+      await animTo(targetDst);
+      if (!isRunning || myRun !== simRunId) break;
+
+      clearTopoAlert();
+      toast("🎉 成功！目的地に到着しました", false, true);
+
+      await wait(450);
+      pkt.style.opacity = 0;
+      isRunning = false;
+      setRunningUI(false);
+      document.querySelectorAll('.router').forEach(e => e.classList.remove('forwarding'));
+      break;
+    }
+
+    const nextRouter = route.gw;
+    const commonNet = findCommonNet(currentRouter, nextRouter);
+
+    if (!commonNet) {
+      if (Date.now() - lastNoRouteToast > 2500) {
+        toast(`⚠️ ${toJp(currentRouter)} → ${toJp(nextRouter)} の共通ネットが見つからない → 戻ります`, true);
+        lastNoRouteToast = Date.now();
+      }
+      await bounceBack(currentRouter, src, firstHop, hopStack, myRun);
+      currentRouter = bounceBack._currentRouter;
+      continue;
+    }
+
+    // 戻る演出用に記録
+    hopStack.push({ fromRouter: currentRouter, viaNet: commonNet });
+
+    // router -> net -> router
+    await animTo(commonNet);
+    if (!isRunning || myRun !== simRunId) break;
+
+    await animTo(nextRouter);
+    if (!isRunning || myRun !== simRunId) break;
+
+    currentRouter = nextRouter;
+  }
+}
+
+async function bounceBack(currentRouter, srcNet, firstHop, hopStack, myRun) {
+  if (hopStack.length > 0) {
+    const back = hopStack.pop();
+    await animTo(back.viaNet);
+    if (!isRunning || myRun !== simRunId) return (bounceBack._currentRouter = currentRouter);
+    await animTo(back.fromRouter);
+    bounceBack._currentRouter = back.fromRouter;
+    return;
+  }
+  await animTo(srcNet);
+  if (!isRunning || myRun !== simRunId) return (bounceBack._currentRouter = currentRouter);
+  await animTo(firstHop);
+  bounceBack._currentRouter = firstHop;
+}
+
+/* ★移動：パケット位置表示＆ルータ点灯（表は切り替えない） */
+function animTo(targetId) {
+  return new Promise(resolve => {
+    const el = document.getElementById(targetId);
+    const pkt = document.getElementById('packet');
+
+    // 表示系
+    setPacketPosLabel(targetId);
+    if (targetId.startsWith('r')) markForwardingRouter(targetId);
+
+    pkt.style.left = el.style.left;
+    pkt.style.top = el.style.top;
+    setTimeout(resolve, 600);
+  });
+}
+
+/* ユーティリティ */
+function findCommonNet(id1, id2) {
+  const n1 = getNeighbors(id1), n2 = getNeighbors(id2);
+  return n1.find(n => n.startsWith('net') && n2.includes(n));
+}
+function getNeighbors(id) {
+  return LINKS.filter(l => l.a===id || l.b===id).map(l => l.a===id ? l.b : l.a);
+}
+
+function toast(msg, isErr=false, isSuccess=false) {
+  const t = document.getElementById('toast');
+  t.innerText = msg;
+  t.style.borderLeftColor = isErr ? '#fc8181' : (isSuccess ? '#48bb78' : '#ed8936');
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 3000);
+}
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+
+
+</body></html>
